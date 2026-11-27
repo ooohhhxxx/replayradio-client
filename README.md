@@ -1,5 +1,7 @@
 # ReplayRadio Client
 
+**[⬇ 下载 v0.1.0](https://github.com/ooohhhxxx/replayradio-client/releases/tag/v0.1.0)** — 解压后双击 `ReplayRadio.exe`
+
 把 [DcC176/replay-radio](https://github.com/DcC176/replay-radio)（噼里啪啦）包成一个**真正的桌面客户端**：双击就出窗口，不起浏览器、不弹地址栏、不手动开端口。
 
 原项目本身是「本地 Python 服务 + 浏览器网页」。这个仓库不改它的任何业务逻辑，只替换最外层：把浏览器换成 Windows 原生 WebView2 窗口，后端照旧。
@@ -55,7 +57,7 @@ python build_exe.py
 ## 已知限制
 
 - **依赖 WebView2 Runtime**。Win11 自带；Win10 1809+ 一般有，缺了去 [微软官网](https://developer.microsoft.com/microsoft-edge/webview2/) 装 Evergreen Runtime。
-- **不含 ffmpeg**，所以「自动分段 / 跳过空白」不可用。需要的话把 `ffmpeg.exe` 放到 `_internal/ffmpeg/` 后重新打包，或从上游 Releases 用带 ffmpeg 的官方包。
+- **FFmpeg 已内嵌**（`_internal/ffmpeg/ffmpeg.exe`），所以「自动分段 / 跳过空白」可用。仓库不存这个 64MB 二进制：自己构建时把 `ffmpeg.exe` 放进 `vendor/` 或设好 `FFMPEG` 环境变量，构建脚本会自动带上；都不提供则跳过，其余功能不受影响。
 - 托盘图标由上游的「录播姬」逻辑按设置创建，和本窗口并存，属预期行为。
 - 上游接口随 B 站变动，升级时把上游新代码整个替换掉 `app/` 即可，外壳无需改动。
 
