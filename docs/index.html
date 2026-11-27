@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>噼里啪啦 · 独立客户端 — 把回放电台装进一个窗口</title>
+<meta name="description" content="噼里啪啦独立客户端：把 B 站直播回放做成 24 小时频道，原生窗口打开，不起浏览器。免费开源，数据只留在本机。">
+<link rel="icon" href="favicon.png">
+<style>
+:root{
+  --bg:#080a09;
+  --panel:#101312;
+  --panel-2:#151918;
+  --line:rgba(255,255,255,.075);
+  --line-strong:rgba(255,255,255,.14);
+  --text:#e9efeb;
+  --muted:#8b978f;
+  --dim:#5f6b64;
+  --accent:#9fe1cb;
+  --accent-soft:rgba(159,225,203,.12);
+  --radius:14px;
+  --maxw:1120px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg);color:var(--text);
+  font:400 15px/1.7 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;display:block}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+.eyebrow{
+  font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);font-weight:500;
+}
+
+/* nav */
+.nav{
+  position:sticky;top:0;z-index:50;
+  border-bottom:1px solid transparent;transition:.25s;
+}
+.nav.solid{background:rgba(8,10,9,.82);backdrop-filter:blur(14px);border-bottom-color:var(--line)}
+.nav-in{display:flex;align-items:center;gap:26px;height:62px}
+.logo{display:flex;align-items:center;gap:9px;font-weight:500;font-size:15px;letter-spacing:.01em}
+.logo i{width:7px;height:7px;border-radius:50%;background:var(--accent);display:block;box-shadow:0 0 12px var(--accent)}
+.logo small{color:var(--dim);font-size:11px;font-weight:400;letter-spacing:.14em}
+.nav-links{display:flex;gap:24px;margin-left:auto;font-size:13.5px;color:var(--muted)}
+.nav-links a{transition:.2s}
+.nav-links a:hover{color:var(--text)}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:38px;padding:0 20px;border-radius:99px;font-size:13.5px;font-weight:500;
+  border:1px solid var(--line-strong);transition:.2s;white-space:nowrap;cursor:pointer;
+}
+.btn-primary{background:var(--accent);color:#08120e;border-color:var(--accent)}
+.btn-primary:hover{background:#b8ecd9;transform:translateY(-1px)}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+
+/* hero */
+.hero{position:relative;padding:84px 0 0;overflow:hidden}
+.hero::before{
+  content:"";position:absolute;left:50%;top:-260px;width:900px;height:620px;
+  transform:translateX(-50%);pointer-events:none;
+  background:radial-gradient(ellipse at center,rgba(159,225,203,.13),rgba(159,225,203,.03) 42%,transparent 68%);
+}
+.hero-in{position:relative;text-align:center}
+.tag{
+  display:inline-flex;align-items:center;gap:8px;padding:5px 13px;border-radius:99px;
+  border:1px solid rgba(159,225,203,.25);background:var(--accent-soft);
+  font-size:12px;color:var(--accent);margin-bottom:26px;
+}
+.tag span{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+h1{
+  font-size:clamp(34px,5.4vw,60px);line-height:1.16;font-weight:500;letter-spacing:-.02em;
+}
+h1 em{font-style:normal;color:var(--accent)}
+.sub{
+  max-width:620px;margin:22px auto 0;color:var(--muted);font-size:16.5px;line-height:1.75;
+}
+.cta{display:flex;gap:12px;justify-content:center;margin-top:34px;flex-wrap:wrap}
+.meta{margin-top:20px;font-size:12.5px;color:var(--dim);display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.meta i{color:var(--accent);font-style:normal}
+
+.shot{
+  margin:64px auto 0;max-width:1000px;position:relative;border-radius:16px;
+  border:1px solid var(--line-strong);overflow:hidden;
+  box-shadow:0 40px 90px -30px rgba(0,0,0,.9),0 0 0 1px rgba(159,225,203,.06);
+}
+.shot img{width:100%;height:auto}
+.shot::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(to top,rgba(8,10,9,.55),transparent 42%);
+}
+
+/* sections */
+section{padding:96px 0}
+.sec-head{max-width:640px;margin-bottom:44px}
+.sec-head h2{font-size:clamp(24px,3.2vw,32px);font-weight:500;letter-spacing:-.01em;margin:12px 0 12px}
+.sec-head p{color:var(--muted);font-size:15px}
+
+/* why */
+.why{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.why div{background:var(--panel);padding:24px 22px}
+.why h3{font-size:14px;font-weight:500;margin-bottom:7px;display:flex;align-items:center;gap:7px}
+.why h3::before{content:"";width:5px;height:5px;background:var(--accent);border-radius:1px}
+.why p{font-size:13px;color:var(--muted);line-height:1.65}
+
+/* features */
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:26px 24px 24px;transition:.25s;position:relative;overflow:hidden;
+}
+.card:hover{border-color:rgba(159,225,203,.32);background:var(--panel-2);transform:translateY(-2px)}
+.card .no{font-size:11px;letter-spacing:.12em;color:var(--dim);font-variant-numeric:tabular-nums}
+.card h3{font-size:16px;font-weight:500;margin:14px 0 9px}
+.card p{font-size:13.5px;color:var(--muted);line-height:1.68}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+.badges span{
+  font-size:12px;color:var(--muted);padding:5px 11px;border:1px solid var(--line);
+  border-radius:99px;background:rgba(255,255,255,.02);
+}
+
+/* gallery */
+.gal{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.gal figure{
+  border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+  background:var(--panel);transition:.25s;
+}
+.gal figure:hover{border-color:var(--line-strong)}
+.gal img{width:100%;height:auto}
+.gal figcaption{padding:12px 16px;font-size:12.5px;color:var(--muted);border-top:1px solid var(--line)}
+
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;counter-reset:s}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:26px 24px}
+.step::before{
+  counter-increment:s;content:"0" counter(s);
+  font-size:12px;color:var(--accent);letter-spacing:.1em;
+}
+.step h3{font-size:15px;font-weight:500;margin:12px 0 8px}
+.step p{font-size:13.5px;color:var(--muted)}
+code{
+  font-family:ui-monospace,"SFMono-Regular",Consolas,monospace;font-size:12.5px;
+  background:rgba(255,255,255,.06);padding:2px 6px;border-radius:5px;color:var(--accent);
+}
+
+/* download */
+.dl{
+  border:1px solid var(--line);border-radius:18px;background:
+    radial-gradient(ellipse at 20% 0%,rgba(159,225,203,.1),transparent 60%),var(--panel);
+  padding:44px 40px;display:grid;grid-template-columns:1fr auto;gap:36px;align-items:center;
+}
+.dl h2{font-size:clamp(22px,2.8vw,28px);font-weight:500;margin-bottom:10px}
+.dl p{color:var(--muted);font-size:14px;max-width:520px}
+.dl-list{margin-top:20px;display:flex;flex-direction:column;gap:7px;font-size:12.5px;color:var(--dim)}
+.dl-list i{color:var(--accent);font-style:normal;margin-right:7px}
+.file{
+  font-size:12px;color:var(--dim);margin-top:14px;
+  font-family:ui-monospace,Consolas,monospace;word-break:break-all;
+}
+.dl-side{text-align:center}
+.big-dl{
+  display:inline-flex;flex-direction:column;align-items:center;gap:4px;
+  padding:16px 34px;border-radius:12px;background:var(--accent);color:#07120d;transition:.2s;
+}
+.big-dl:hover{background:#b8ecd9;transform:translateY(-2px)}
+.big-dl strong{font-size:15px;font-weight:500}
+.big-dl small{font-size:11.5px;opacity:.72}
+.dl-side .alt{margin-top:14px;font-size:12.5px;color:var(--muted)}
+.dl-side .alt a{border-bottom:1px solid var(--line-strong);padding-bottom:1px}
+.dl-side .alt a:hover{color:var(--accent);border-color:var(--accent)}
+
+/* faq */
+.faq{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+details{border-bottom:1px solid var(--line)}
+summary{
+  padding:20px 44px 20px 0;cursor:pointer;font-size:14.5px;position:relative;list-style:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::after{
+  content:"";position:absolute;right:8px;top:50%;width:7px;height:7px;
+  border-right:1.5px solid var(--dim);border-bottom:1.5px solid var(--dim);
+  transform:translateY(-70%) rotate(45deg);transition:.25s;
+}
+details[open] summary::after{transform:translateY(-30%) rotate(-135deg);border-color:var(--accent)}
+details p{padding:0 44px 22px 0;color:var(--muted);font-size:13.5px;line-height:1.75}
+
+/* footer */
+footer{border-top:1px solid var(--line);padding:44px 0 56px;margin-top:20px}
+.foot{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap}
+.foot-main{max-width:520px}
+.foot-main p{font-size:12.5px;color:var(--dim);line-height:1.85;margin-top:10px}
+.foot-links{display:flex;gap:22px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
+.foot-links a:hover{color:var(--accent)}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s ease,transform .6s ease}
+.reveal.in{opacity:1;transform:none}
+
+@media(max-width:900px){
+  .why{grid-template-columns:repeat(2,1fr)}
+  .grid,.steps{grid-template-columns:1fr}
+  .gal{grid-template-columns:1fr}
+  .dl{grid-template-columns:1fr;padding:32px 26px;text-align:center}
+  .dl p,.dl-list{text-align:left}
+  .nav-links{display:none}
+  section{padding:68px 0}
+  .hero{padding-top:56px}
+}
+@media(prefers-reduced-motion:reduce){
+  .reveal{opacity:1;transform:none;transition:none}
+  html{scroll-behavior:auto}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="#top"><i></i>噼里啪啦 <small>CLIENT</small></a>
+    <div class="nav-links">
+      <a href="#why">为什么</a>
+      <a href="#features">功能</a>
+      <a href="#gallery">界面</a>
+      <a href="#download">下载</a>
+      <a href="#faq">问题</a>
+    </div>
+    <a class="btn btn-primary" href="#download">下载</a>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-in">
+    <div class="tag"><span></span>v0.1.0 · 免费开源 · Windows 10 / 11</div>
+    <h1>把回放电台<br><em>装进一个窗口</em></h1>
+    <p class="sub">
+      填一位主播的 B 站 UID，TA 的全部直播回放就排成一条 24 小时循环时间轴，
+      打开即对齐到「现在该播第几场」。原生窗口运行，不起浏览器、不弹地址栏、不用敲命令。
+    </p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#download">下载 Windows 版</a>
+      <a class="btn btn-ghost" href="https://github.com/ooohhhxxx/replayradio-client" target="_blank" rel="noopener">查看源码</a>
+    </div>
+    <div class="meta">
+      <span><i>·</i> 单目录解压即用</span>
+      <span><i>·</i> 数据只留在本机</span>
+      <span><i>·</i> 已内置 FFmpeg</span>
+    </div>
+
+    <div class="shot reveal">
+      <img src="assets/live.png" alt="客户端运行界面：左侧节目列表，右侧播放器与详情面板" loading="lazy">
+    </div>
+  </div>
+</header>
+
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="eyebrow">WHY CLIENT</div>
+      <h2>和网页版有什么不一样</h2>
+      <p>页面本身没改，改的是外面那层壳：从「跑个脚本再开浏览器」变成「双击一个程序」。</p>
+    </div>
+    <div class="why reveal">
+      <div>
+        <h3>原生窗口</h3>
+        <p>WebView2 内嵌，有任务栏图标，Alt+Tab 能切，不带地址栏和标签页。</p>
+      </div>
+      <div>
+        <h3>不用装 Python</h3>
+        <p>运行时一起打包，机器上没配过开发环境也能直接跑。</p>
+      </div>
+      <div>
+        <h3>端口自己管</h3>
+        <p>启动前先探一个空闲端口再交给后端，不和你别的本地服务抢。</p>
+      </div>
+      <div>
+        <h3>数据不搬家</h3>
+        <p>仍然读写 <code>%LOCALAPPDATA%\ReplayRadio</code>，官方版攒的配置直接生效。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="eyebrow">FEATURES</div>
+      <h2>六个板块，一个窗口</h2>
+      <p>不用在标签页之间来回跳，想看的都收在同一处，切一下就到。</p>
+    </div>
+    <div class="grid">
+      <div class="card reveal"><div class="no">01</div><h3>24 小时频道</h3>
+        <p>全部回放按固定顺序排成循环时间轴，随时打开都在「直播中」，自动排期、自动去重。</p></div>
+      <div class="card reveal"><div class="no">02</div><h3>直播间与弹幕</h3>
+        <p>主播开播直接进直播间，右侧实时弹幕，登录后可发弹幕互动，画质可切到 1080P。</p></div>
+      <div class="card reveal"><div class="no">03</div><h3>节目单</h3>
+        <p>24 小时 / 72 小时 / 整个循环三种时间表，任一场点一下就播，不用自己找位置。</p></div>
+      <div class="card reveal"><div class="no">04</div><h3>歌单</h3>
+        <p>粘一个 B 站链接导入整张歌单，按语言、风格、演唱者筛选，支持从头一路连播。</p></div>
+      <div class="card reveal"><div class="no">05</div><h3>监控室</h3>
+        <p>多路直播同屏，1~9 路 / 自适应 / 自由拖动随便切，每路独立音量与画质。</p></div>
+      <div class="card reveal"><div class="no">06</div><h3>动态与微博</h3>
+        <p>主播最新动态和微博聚在页面里，顺手还能接着看正在播的那一场。</p></div>
+    </div>
+    <div class="badges reveal">
+      <span>跳过空白片段</span><span>分段导航</span><span>剧场模式</span>
+      <span>多位主播</span><span>板块配色</span><span>深浅主题</span>
+      <span>简体 / 繁体</span><span>启动板块自选</span><span>自动分段</span>
+    </div>
+  </div>
+</section>
+
+<section id="gallery">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="eyebrow">SCREENSHOTS</div>
+      <h2>真实运行界面</h2>
+      <p>本机运行时的实拍，未做视觉修饰。</p>
+    </div>
+    <div class="gal">
+      <figure class="reveal"><img src="assets/theater.png" alt="剧场模式：网页全屏，左右竖条分别是本场分段与接下来播什么" loading="lazy">
+        <figcaption>剧场模式 — 左边本场分段，右边接下来播什么</figcaption></figure>
+      <figure class="reveal"><img src="assets/schedule.png" alt="节目单：24 小时、72 小时与整个循环的时间表" loading="lazy">
+        <figcaption>节目单 — 三种时间跨度，点一下直接播</figcaption></figure>
+      <figure class="reveal"><img src="assets/monitor.png" alt="监控室：同时看多路直播，每路独立音量与画质" loading="lazy">
+        <figcaption>监控室 — 多路同屏，各自独立控制</figcaption></figure>
+      <figure class="reveal"><img src="assets/live.png" alt="回放电台主界面：节目列表与播放详情" loading="lazy">
+        <figcaption>主界面 — 节目列表、播放器与详情同屏</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="eyebrow">QUICK START</div>
+      <h2>三步开始</h2>
+      <p>没有安装向导，也不需要命令行。</p>
+    </div>
+    <div class="steps">
+      <div class="step reveal"><h3>解压</h3>
+        <p>把下载的压缩包解到任意文件夹。建议别放 <code>C:\Program Files</code>，那里写文件要管理员权限。</p></div>
+      <div class="step reveal"><h3>双击</h3>
+        <p>运行 <code>ReplayRadio.exe</code>，窗口直接出来。重复双击不会重复起服务。</p></div>
+      <div class="step reveal"><h3>填 UID</h3>
+        <p>首屏填一位主播的 B 站 UID（个人主页网址里那串数字），点「检测」确认后即可进入频道。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="dl reveal">
+      <div>
+        <h2>下载噼里啪啦客户端</h2>
+        <p>解压即用，已内置 FFmpeg，所以「自动分段 / 跳过空白」开箱可用。</p>
+        <div class="dl-list">
+          <div><i>·</i> 版本 v0.1.0，Windows 10 / 11 x64</div>
+          <div><i>·</i> 需要 WebView2 Runtime（Win11 自带，Win10 一般已有）</div>
+          <div><i>·</i> 首次启动写数据到 <code>%LOCALAPPDATA%\ReplayRadio</code></div>
+          <div><i>·</i> 不收集使用数据，无广告、无收费</div>
+        </div>
+        <div class="file">SHA256 64e402dcc759e09141044efcd1d03e8cf7e8349f846ae34c69fd57ede33ac3a8</div>
+      </div>
+      <div class="dl-side">
+        <a class="big-dl" href="https://github.com/ooohhhxxx/replayradio-client/releases/download/v0.1.0/ReplayRadio-v0.1.0-win64.zip">
+          <strong>下载 ZIP</strong><small>34.5 MB · x64</small>
+        </a>
+        <div class="alt">
+          <a href="https://github.com/ooohhhxxx/replayradio-client/releases" target="_blank" rel="noopener">全部版本与更新日志</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="eyebrow">FAQ</div>
+      <h2>常见问题</h2>
+    </div>
+    <div class="faq reveal">
+      <details><summary>提示「本地服务启动失败」怎么办？</summary>
+        <p>先看 <code>%LOCALAPPDATA%\ReplayRadio\launcher.log</code> 和同目录的 <code>log.txt</code>。
+        最常见是端口被别的程序占了，或杀毒软件拦了本地监听。关掉占用端口的程序后重试即可，
+        外壳会自动换一个空闲端口。</p></details>
+      <details><summary>为什么没有 1080P？</summary>
+        <p>未登录时 B 站接口只下发较低清晰度。在页面里点播放器右上角「登录」扫码，
+        之后就能取到更高画质；能不能拿到 1080P 还取决于账号本身。</p></details>
+      <details><summary>可以装在 Program Files 吗？</summary>
+        <p>不建议。程序要把网页文件和数据写到用户目录，装在受保护路径容易触发权限问题。
+        WebView2 的缓存也已显式指到用户目录，但解压到普通文件夹最省事。</p></details>
+      <details><summary>我的观看记录和账号会被上传吗？</summary>
+        <p>不会。主播列表、分段结果、歌单全部只写本机 <code>%LOCALAPPDATA%\ReplayRadio</code>；
+        B 站登录凭据只存在本机 <code>sessdata.txt</code>，仅用于向 B 站官方接口取流，不发给任何第三方。</p></details>
+      <details><summary>和官方版是什么关系？</summary>
+        <p>这是社区外壳，不是官方发行版。业务代码来自
+        <a href="https://github.com/DcC176/replay-radio" target="_blank" rel="noopener" style="color:var(--accent)">DcC176/replay-radio</a>（MIT），
+        本仓库只替换最外层容器，并把原项目代码作为 <code>app/</code> 原样快照保留，便于跟随上游升级。</p></details>
+      <details><summary>「自动分段」还需要自己装 FFmpeg 吗？</summary>
+        <p>不需要，发行包里已经带了。自己从源码构建时，把 <code>ffmpeg.exe</code> 放进
+        <code>vendor/</code> 或设好 <code>FFMPEG</code> 环境变量即可，不提供则跳过该功能，其余正常。</p></details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div class="foot-main">
+      <div class="logo" style="font-size:14px"><i></i>噼里啪啦 <small>CLIENT</small></div>
+      <p>
+        非官方粉丝向工具。内容版权归相应主播（UP 主）所有，播放全程在 B 站体系内完成，
+        本工具不转存、不二次上传。外壳代码 MIT，业务代码版权归上游作者。
+      </p>
+    </div>
+    <div class="foot-links">
+      <a href="https://github.com/ooohhhxxx/replayradio-client" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/DcC176/replay-radio" target="_blank" rel="noopener">上游项目</a>
+      <a href="https://github.com/ooohhhxxx/replayradio-client/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/ooohhhxxx/replayradio-client/blob/main/LICENSE" target="_blank" rel="noopener">许可</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+const nav = document.getElementById('nav');
+const onScroll = () => nav.classList.toggle('solid', window.scrollY > 12);
+onScroll();
+window.addEventListener('scroll', onScroll, {passive: true});
+
+if ('IntersectionObserver' in window) {
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((e) => {
+      if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); }
+    });
+  }, {threshold: 0.12, rootMargin: '0px 0px -40px'});
+  document.querySelectorAll('.reveal').forEach((el, i) => {
+    el.style.transitionDelay = (i % 6) * 45 + 'ms';
+    io.observe(el);
+  });
+} else {
+  document.querySelectorAll('.reveal').forEach((el) => el.classList.add('in'));
+}
+</script>
+</body>
+</html>
