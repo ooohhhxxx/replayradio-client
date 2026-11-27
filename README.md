@@ -1,6 +1,6 @@
 # ReplayRadio Client
 
-**[⬇ 下载 v0.1.0](https://github.com/ooohhhxxx/replayradio-client/releases/tag/v0.1.0)** — 解压后双击 `ReplayRadio.exe`
+**[官网](https://ooohhhxxx.github.io/replayradio-client/)** · **[⬇ 下载 v0.1.0](https://github.com/ooohhhxxx/replayradio-client/releases/tag/v0.1.0)** — 解压后双击 `ReplayRadio.exe`
 
 把 [DcC176/replay-radio](https://github.com/DcC176/replay-radio)（噼里啪啦）包成一个**真正的桌面客户端**：双击就出窗口，不起浏览器、不弹地址栏、不手动开端口。
 
@@ -22,6 +22,7 @@
 launcher.py        外壳：找端口 → 拉起后端 → 开窗口 → 退出时收尾
 build_exe.py       打包脚本（PyInstaller onedir）
 app/               上游代码，保持原样，便于整体替换升级
+docs/              官网单页（GitHub Pages，main 分支 /docs）
 ```
 
 `launcher.py` 打包后还是一个双角色程序：
