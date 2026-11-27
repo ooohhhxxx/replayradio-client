@@ -1,0 +1,377 @@
+# -*- coding: utf-8 -*-
+"""把本地服务打包成单文件 EXE。
+
+用法：
+    python tools/build_exe.py
+
+产物：
+    发布/噼里啪啦.exe
+        单文件，自带 Python 运行时与全部网页文件，双击即用。
+        分发时只需要给这一个文件。
+
+网页文件怎么进去的
+    index.html / favicon.ico / favicon.png / assets / data / readme.txt 全部用 --add-data 打进 EXE。
+    EXE 首次运行时把它们释放出来（网页进 %LOCALAPPDATA%\\ReplayRadio\\www\\，
+    使用说明放同级目录），之后从释放出来的目录提供服务。
+
+    这样分发只要一个 EXE；同时文件确实落在磁盘上，想改前端或看说明都还找得到。
+    开发时若 EXE 同目录放了 index.html，则优先用外置的，改前端不用重新打包。
+
+    PyInstaller 的 --name 用 ASCII（ReplayRadio），打包完再改名成中文，
+    避开中文名在 spec / build 中间产物上的编码坑。
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OUT = os.path.join(ROOT, "发布")
+# 构建缓存目录。⚠️ **每次用一个全新的名字**：这台机器上有安全软件会在文件刚被
+# 创建后独占它，上一次打包留下的 build/ 里每个文件都写不进去（PyInstaller 连自己的
+# .spec 都写不了，报 Permission denied）。换新目录即可绕开。
+# 这些 build_* 目录纯属缓存（不进包、不进版本库），可以随时手动删除。
+BUILD = os.path.join(ROOT, "build_%s" % time.strftime("%Y%m%d_%H%M%S"))
+
+APP_VERSION = "1.9.36"                     # 程序版本号，每版递增（平行版本从 1.0.0 起步）
+PYI_NAME = "ReplayRadio"                  # PyInstaller 内部用名（ASCII）
+# 给用户的文件名带版本号 —— 发布目录里会同时存在多个版本，一眼能看出哪个是新的。
+# 内部标识（APP_TAG、释放目录、实例探测）都走 HTTP 或固定字符串，**不依赖这个文件名**，
+# 所以改名不影响单实例检测与 --stop。
+FINAL_NAME = "噼里啪啦-v%s.exe" % APP_VERSION
+WEB = ["index.html", "favicon.ico", "favicon.png", "assets", "data"]   # 网页文件，释放到 www\
+README_SRC = "readme.txt"                 # 使用说明，释放到用户目录根
+
+README = """噼里啪啦 · 使用说明
+========================================
+
+【怎么用】
+双击「{{NAME}}」。它会自动打开浏览器并开始播放。
+之后想再看，直接开浏览器访问 http://127.0.0.1:8765/ 就行。
+
+【怎么关】
+在播放页面右下角点「停止本地服务」。
+也可以在任务管理器里结束「{{NAME}}」。
+关掉网页后还有一个后台图标（系统托盘）：右键可以打开控制台或「停止录制并退出」。
+不想要这个图标：设置 → 后台运行 → 关掉「后台应用图标」。关掉图标不影响录制。
+⚠️ 网页全部关掉后：没有录制任务就自动退出；正在录制时会留在后台继续录，
+   等当前文件写完后自动退出（不会把录像截断）。
+
+【注意】
+1. 只需要这一个 EXE，不用额外拷任何文件。
+   首次运行会把网页文件释放到 %LOCALAPPDATA%\\ReplayRadio\\www\\。
+2. 每次打开页面都会重新拉取最新回放列表，不用手动刷新。
+   第一次打开会先请你添加一位主播（填 B 站 UID），之后就直接进频道。
+3. 想看 1080P：点播放器右上角「登录」，用 B 站 App 扫码。
+   登录凭据存在 %LOCALAPPDATA%\\ReplayRadio\\sessdata.txt，
+   只发给 B 站自己的接口，不外传。
+4. 出问题看日志：%LOCALAPPDATA%\\ReplayRadio\\log.txt
+5. 如果 8765 端口被别的程序占用，会自动顺延到 8766、8767……
+   实际地址看日志。
+"""                                 # 下面再替换文件名：说明里有 %LOCALAPPDATA%，
+                                    # 走 % 格式化会把它当成占位符报错，所以用 replace
+README = README.replace("{{NAME}}", FINAL_NAME)
+
+
+def ensure_pyinstaller():
+    try:
+        import PyInstaller          # noqa: F401
+    except ImportError:
+        print("未安装 PyInstaller，请先运行：")
+        print("    %s -m pip install pyinstaller" % sys.executable)
+        sys.exit(1)
+
+
+# data/ 下**不该进分发包**的东西：全是运行时数据，体积可到几十上百 MB，
+# 而且每位用户各一份、可重算。`--add-data` 不读 .gitignore，所以必须显式剔除
+# （实测漏剔除时 EXE 从 54MB 涨到 80MB：chu2u 的两个临时 chunk.wav 就占 32MB）。
+# feedback = 用户自己提交的反馈与诊断信息，绝不能跟着包发给别人
+DATA_EXCLUDE_DIRS = {"stations", "fans", "feedback"}   # 各主播的清单缓存/分段结果/音频中间产物；fans = 开发者自己的粉丝数历史
+DATA_EXCLUDE_SUFFIX = (".bak", ".bak_test")
+
+# data/ 顶层那些**运行时会写**的文件：一律不许把开发机上的内容打进包。
+# 实测踩过：主站的清单缓存 data/programs_cache.json 里留着调试期的 65 条节目，
+# 被打进 EXE 后，用户新加的主播（第一位就是主站）会读到它 ——
+# 界面上写着新主播的名字、播的却全是上一个人的内容。
+# 所以打包时统一覆盖成空表，不再依赖「发布前记得手动清」。
+_EMPTY_PROGRAMS_JS = ("// 通用版不带离线快照：清单由本机服务按设置里的主播实时抓取。\n"
+                      'window.PROGRAMS = {"meta": {}, "programs": []};\n')
+DATA_RESET = {
+    "programs_cache.json": "{}\n",
+    "series_cache.json": "{}\n",
+    # 归档清单缓存：键是「UID|剧集id|类型」，实测开发机上这份有 40KB、
+    # 直接带着开发者自己的 UID 打进包（v1.0.84 查出来的）。它只是缓存，清空即可。
+    "archives_cache.json": "{}\n",
+    # DD 头像缓存（uid → face）：是开发者看过的那批主播，别人装了用不上，会自己重新取
+    "dd_faces.json": "{}\n",
+    "programs.json": '{\n "meta": {},\n "programs": []\n}\n',
+    "programs.js": _EMPTY_PROGRAMS_JS,
+    # 这四个是 index.html 静态 <script src> 的容器，必须存在且语法有效，只是内容为空
+    "segments.js": "window.SEGMENTS = {};\n",
+    "sung.js": "window.SUNGKEYS = {};\n",
+    "setlists.js": "window.SETLISTS = {};\n",
+    "labels.js": "window.SEGLABELS = {};\n",
+}
+# .main_data_owner 是「data/ 顶层那批旧数据归位给哪位主站」的标记（见 serve.py 的
+# adopt_legacy_main_data）。它在包内存在的话，用户机 unpack 之后会以为早就搬过家，
+# 真主站的历史分段就永远归不了位 —— 所以它和 seg_state.json 一样**绝不能打包**。
+#
+# follow_cache.json 是 v1.0.26 加的「关注列表落盘缓存」：里面是**开发者账号**的关注名单
+# 与在播列表。打进包不只是脏数据，还是把别人的关注关系随安装包发出去 —— 绝不能进。
+#
+# playlists.json / song_tags.json 是 v1.0.28 的歌单数据：开发者本机导入过什么歌单、
+# 给哪些歌填过标签，都不该随包发出去（song_tags 的**内置**表在 assets/ 里，那份要进包）。
+#
+# buvid.json 是 B 站的设备指纹（v1.0.7x 起落盘）：打进包等于把开发者的指纹发给所有用户，
+# 而且新用户第一次运行会误以为自己"已经领过"，该自己领一个。data/fans/ 同理 ——
+# 那是开发者自己的粉丝数历史，别人装上去看到的是自己的空趋势才对。
+DATA_EXCLUDE_FILES = {"seg_state.json", ".main_data_owner", "follow_cache.json",
+                      "playlists.json", "song_tags.json", "buvid.json",
+                      # 录播姬的房间列表与输出目录：开发机上一定试加过别人的房间，
+                      # 跟着包发出去就是「打开就看到别人的房间」。文件缺失时后端会用
+                      # 默认设置（空列表 + ~/Videos/噼里啪啦/录播），所以不进包正合适。
+                      "recorder.json",
+                      # 反馈上报的 webhook 配置（开发者自己的地址，不该发给用户）
+                      "feedback.json",
+                      # 手动添加的工会成员（开发机上的测试名单，不该跟着包发出去）
+                      "guilds_user.json",
+                      # vtbs.moe 主播资料缓存（近 1 万条 / 约 2MB，纯缓存）
+                      "vtbs_cache.json", "vtbs_info.json"}
+# 归位标记的**变体**（本地测试会把它重命名成 .main_data_owner.stash 再挪回来）同样
+# 不能进包：包里只要出现「已经搬过家」的痕迹，真主站的历史分段就永远归不了位。
+DATA_EXCLUDE_PREFIX = (".main_data_owner",)
+
+# stations.json 也算「顶层运行时文件」，但它的空表形态不能写成 {} ——
+# 得保留 _note（给用户直接编辑文件时看的字段说明）与 _version（升级合并要用），
+# 只把 stations 数组清空。所以它不进 DATA_RESET 的字面量表，单独处理；
+# 但「先跳过复制、再整体重写」这一步和 DATA_RESET 完全一致。
+DATA_RESET_FILES = set(DATA_RESET) | {"stations.json"}
+
+
+def _write_empty_stations(stage):
+    """把暂存副本里的 stations.json 清成「一位主播都没有」，但留住说明与版本号。
+
+    为什么必须自动做：开发机上一定会为了测试添加主播，而 stations.json 是
+    **用户数据的入口**，一旦跟着包发出去，用户打开就看到别人的主播 ——
+    v1.0.2 的「主播 ID 与播放内容不符」就是这么来的（当时靠手工清空，
+    漏一次就出事）。所以和第 84 行那批运行时文件一样，改成打包时强制重置。
+    """
+    src = os.path.join(ROOT, "data", "stations.json")
+    note, ver = [], 2
+    try:
+        with open(src, encoding="utf-8") as f:
+            old = json.load(f)
+        if isinstance(old, dict):
+            if isinstance(old.get("_note"), list):
+                note = old["_note"]
+            if isinstance(old.get("_version"), int):
+                ver = old["_version"]
+    except Exception:
+        pass                      # 源文件缺失/损坏也不该让打包失败，用最小结构兜底
+    doc = {}
+    if note:
+        doc["_note"] = note
+    doc["stations"] = []
+    doc["_version"] = ver
+    with open(os.path.join(stage, "stations.json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps(doc, ensure_ascii=False, indent=2) + "\n")
+
+
+def _stage_data():
+    """把 data/ 复制一份**不含运行时数据**的暂存副本，返回它的路径。
+
+    用唯一的目录名（`data-stage-<时间戳>`）而不是固定名：本机删除被劫持到回收站
+    且 fail-closed，固定名会因为「上一次的副本删不掉」而反复失败。
+    而且不删旧副本也不影响正确性 —— 每次都用新的那个来打包。
+
+    硬链接优先（省时间省空间，同盘即可），失败则退回普通复制。
+    运行时文件**不参与复制**，之后再写成空表 —— 硬链接的文件写下去会连带改到源文件。
+    """
+    stage = os.path.join(BUILD, "data-stage-%d" % int(time.time()))
+    src_root = os.path.join(ROOT, "data")
+    os.makedirs(stage, exist_ok=True)
+
+    linked = copied = 0
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        rel = os.path.relpath(dirpath, src_root)
+        # 顶层就砍掉排除目录（stations/），不进它的子树
+        if rel == ".":
+            dirnames[:] = [d for d in dirnames if d not in DATA_EXCLUDE_DIRS]
+        dst_dir = stage if rel == "." else os.path.join(stage, rel)
+        os.makedirs(dst_dir, exist_ok=True)
+        for fn in filenames:
+            if fn.endswith(DATA_EXCLUDE_SUFFIX):
+                continue
+            if rel == "." and (fn in DATA_RESET_FILES or fn in DATA_EXCLUDE_FILES
+                               or fn.startswith(DATA_EXCLUDE_PREFIX)):
+                continue                # 顶层运行时文件：见下，统一写空表
+            s = os.path.join(dirpath, fn)
+            d = os.path.join(dst_dir, fn)
+            try:
+                os.link(s, d)               # 硬链接：同一份数据，不占额外空间
+                linked += 1
+            except OSError:
+                shutil.copy2(s, d)
+                copied += 1
+
+    for fn, content in DATA_RESET.items():
+        with open(os.path.join(stage, fn), "w", encoding="utf-8") as f:
+            f.write(content)
+    _write_empty_stations(stage)
+
+    print("data 暂存：%s（硬链接 %d、复制 %d；已剔除 %s；已重置为空表 %s）"
+          % (os.path.basename(stage), linked, copied,
+             "、".join(sorted(DATA_EXCLUDE_DIRS | DATA_EXCLUDE_FILES)),
+             "、".join(sorted(DATA_RESET_FILES))))
+    return stage
+
+
+def _write_text(path, text):
+    """写文本到 build 目录。
+
+    ⚠️ 不能直接 open(path, "w")：这台机器上有安全软件**在文件刚被创建后立刻独占它**，
+    同一个路径第二次写就 Permission denied（实测 build/www_version.txt、build/readme.txt
+    都是这样，而换到一个新目录就能正常写）。改名只需要目录权限、不需要目标文件的写权，
+    所以先把旧文件改名挪开、再写新的；挪走的旧文件尽力删除（删不掉留着也无害）。
+    """
+    if os.path.exists(path):
+        try:
+            os.rename(path, "%s.%d.old" % (path, int(time.time() * 1000)))
+        except OSError:
+            pass
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def check_versions():
+    """serve.py 里的 APP_VERSION 决定「检查更新」的当前版本，必须与本文件一致。
+
+    两处各写一份是刻意的（后端不 import 构建脚本），代价是可能忘同步 ——
+    忘了就会出现「界面显示有新版本，装完还是同一个版本」。所以在打包前直接拦住。
+    """
+    p = os.path.join(ROOT, "tools", "serve.py")
+    m = re.search(r'^APP_VERSION = "(\d+(?:\.\d+)+)"', open(p, encoding="utf-8").read(), re.M)
+    if not m:
+        raise SystemExit("serve.py 里找不到 APP_VERSION，无法校验版本号")
+    if m.group(1) != APP_VERSION:
+        raise SystemExit("版本号不一致：build_exe.py=%s，serve.py=%s。"
+                         "请把两处改成同一个版本再打包。" % (APP_VERSION, m.group(1)))
+
+
+def build_exe():
+    """打包成单文件、无控制台窗口的 EXE，网页文件与说明一并内置"""
+    check_versions()
+    os.makedirs(BUILD, exist_ok=True)
+
+    # 版本标记：EXE 内一份、释放目录一份，比对决定要不要重新释放
+    ver_file = os.path.join(BUILD, "www_version.txt")
+    _write_text(ver_file, time.strftime("%Y%m%d%H%M%S"))
+
+    readme_file = os.path.join(BUILD, README_SRC)
+    _write_text(readme_file, README)
+
+    args = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm",                  # 覆盖上次产物，不弹交互确认
+        "--onefile",                    # 单文件：Python 运行时一起打进去
+        "--noconsole",                  # 静默：双击后不出现黑窗口
+        "--name", PYI_NAME,
+        # ⚠️ 先输出到构建目录、最后再 os.replace 到 发布/：这台机器上
+        # 安全软件会在 EXE 刚写好后独占它，PyInstaller 的 EndUpdateResourceW
+        # （写图标资源）会失败 20 次后放弃。换到新目录写、再只做 rename，就不会撞。
+        "--distpath", os.path.join(BUILD, "dist"),
+        "--workpath", os.path.join(BUILD, "pyi"),
+        "--specpath", BUILD,
+        # collect.py 是运行时用 importlib 动态加载的，PyInstaller 静态分析看不到，
+        # 必须显式带上，否则 /api/programs 实时清单会整体失败。
+        # auto_segments.py 同理：网页里的「自动分段」就是在进程内调它的函数。
+        # 路径必须写绝对路径：--specpath 之后，相对路径会被按 spec 所在目录解析。
+        "--add-data", os.path.join(ROOT, "tools", "collect.py") + os.pathsep + "tools",
+        "--add-data", os.path.join(ROOT, "tools", "auto_segments.py") + os.pathsep + "tools",
+        # 边界精修：读画面「已唱」浮层峰值定歌边界，靠它才不会把歌从中间切开。
+        # 实测纯音频 25 段 / 带精修 27 段，与已有产物一致的是带精修那份 —— 必须一起打包。
+        "--add-data", os.path.join(ROOT, "tools", "seg_refine.py") + os.pathsep + "tools",
+        # 自动歌切：serve.py 的 /api/songcut/* 在后台线程里 import 它（同一套抽帧+差分）。
+        # 与 auto_segments/seg_refine 一样是运行时才 import，静态分析看不到，必须显式带上。
+        "--add-data", os.path.join(ROOT, "tools", "songcut.py") + os.pathsep + "tools",
+        "--hidden-import", "songcut",
+        # 它们只被动态加载的 seg_refine 用到，静态分析看不到，得显式声明
+        # （numpy 34MB + pillow 7MB，EXE 会从 9.6MB 涨到 40MB 上下）。
+        "--hidden-import", "numpy",
+        "--hidden-import", "PIL",
+        "--hidden-import", "PIL.Image",
+    ]
+
+    # FFmpeg：自动分段要把音频解码成 PCM，没有它这个功能在别人机器上直接不可用
+    # （find_ffmpeg 的兜底目录遍历只在个别机器上碰巧命中）。一起打包。
+    # 不把二进制放仓库里（84MB 进 git 太蠢），构建时按 find_ffmpeg 的同一套搜索找。
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    from auto_segments import find_ffmpeg          # noqa: E402
+    ff = find_ffmpeg()
+    if ff:
+        args += ["--add-data", ff + os.pathsep + "ffmpeg"]
+        print("打包 FFmpeg：%s（%.0f MB）" % (ff, os.path.getsize(ff) / 1048576))
+    else:
+        print("！没找到 ffmpeg —— 打出来的 EXE 自动分段不可用（其余功能正常）")
+    lic = os.path.join(ROOT, "ffmpeg.LICENSE.txt")
+    if os.path.exists(lic):
+        args += ["--add-data", lic + os.pathsep + "."]
+
+    # 网页文件与说明：单个文件放根目录，目录按原名放，与 serve.py 的释放逻辑对应
+    for item in WEB:
+        p = os.path.join(ROOT, item)
+        if not os.path.exists(p):
+            print("缺少 %s，无法打包" % p)
+            sys.exit(1)
+        if item == "data":
+            p = _stage_data()          # data 要剔除运行时子目录，见下
+        dest = "." if os.path.isfile(p) else item
+        args += ["--add-data", p + os.pathsep + dest]
+    args += ["--add-data", ver_file + os.pathsep + "."]
+    args += ["--add-data", readme_file + os.pathsep + "."]
+
+    icon = os.path.join(ROOT, "favicon.ico")     # 由 tools/make_icon.py 生成
+    if os.path.exists(icon):
+        args += ["--icon", icon]
+    args.append(os.path.join(ROOT, "tools", "serve.py"))
+
+    print("$ " + " ".join(args))
+    subprocess.check_call(args, cwd=ROOT)
+
+    src = os.path.join(BUILD, "dist", PYI_NAME + ".exe")
+    dst = os.path.join(OUT, FINAL_NAME)
+    # 直接覆盖，不产生需要删除的中间文件。
+    # Windows 上刚写出来的 EXE 会被 Defender / 索引器短暂占用，rename 会报 WinError 5，
+    # 所以重试几次再放弃（实测第一次常失败、隔一两秒就好）。
+    for i in range(10):
+        try:
+            os.replace(src, dst)
+            break
+        except PermissionError:
+            if i == 9:
+                # 最常见的原因不是 Defender，而是**改名目标还被占着**：
+                # 预览器 / 资源管理器打开过它，或者上一个同名产物正在被另一个进程读。
+                # 本机又删不掉它，唯一干净的出路是换版本号重打，所以这里说清楚。
+                sys.exit("改名为「%s」失败（PermissionError）：目标多半被预览器/资源管理器占着，"
+                         "或该版本号已经打出过一份。\n请先关闭占用它的窗口，"
+                         "或把 APP_VERSION 递增一档后重新打包。" % FINAL_NAME)
+            time.sleep(1)
+    return dst
+
+
+def main():
+    ensure_pyinstaller()
+    os.makedirs(OUT, exist_ok=True)
+
+    exe = build_exe()
+
+    print("\n完成：%s（%.1f MB）" % (exe, os.path.getsize(exe) / 1048576.0))
+    print("分发时只需要这一个 EXE。")
+    print("首次运行会把网页文件释放到 %LOCALAPPDATA%\\ReplayRadio\\。")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
